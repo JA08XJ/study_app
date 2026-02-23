@@ -3,10 +3,9 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
-# --- 1. 基本設定（モバイル最適化） ---
-st.set_page_config(page_title="Study App Pro", layout="centered", initial_sidebar_state="collapsed")
+# --- 1. 基本設定 ---
+st.set_page_config(page_title="Study App Pro", layout="centered")
 
 # --- 2. ログイン機能 ---
 if 'user' not in st.session_state:
@@ -17,7 +16,6 @@ def login():
     user_input = st.text_input("ユーザー名")
     pw_input = st.text_input("パスワード", type="password")
     if st.button("ログイン", use_container_width=True, type="primary"):
-        # Secrets の [passwords] セクションを確認
         if "passwords" in st.secrets and user_input in st.secrets["passwords"]:
             if pw_input == st.secrets["passwords"][user_input]:
                 st.session_state.user = user_input
@@ -25,33 +23,26 @@ def login():
             else:
                 st.error("パスワードが違います")
         else:
-            st.error("ユーザー名が見つかりません。Secretsの設定を確認してください。")
+            st.error("ユーザー名が見つかりません")
 
 if st.session_state.user is None:
     login()
-    st.stop() # ログインするまで以下のコードを実行しない
+    st.stop()
 
-# --- 3. ログイン後の処理 ---
-user = st.session_state.user
-st.sidebar.write(f"👤 ログイン中: {user}")
-if st.sidebar.button("ログアウト"):
-    st.session_state.user = None
-    st.rerun()
-
-# --- 4. データ連携 (Google Sheets) ---
-# Secretsの [connections.gsheets] で指定したURLを自動取得します
+# --- 3. データ連携 (秘密のURLをSecretsから読み込む設定) ---
+# この一行が、Secretsに書いたURLを自動的に探しに行きます
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def load_data(sheet_name):
-    # スプレッドシートから読み込み（キャッシュなしで最新を取得）
-    return conn.read(worksheet=sheet_name, ttl=0).fillna("")
+user = st.session_state.user
 
+# データの読み込み
 try:
-    all_logs = load_data("logs")
-    subj_df = load_data("subjects")
-    mat_df = load_data("materials")
+    all_logs = conn.read(worksheet="logs", ttl=0).fillna("")
+    subj_df = conn.read(worksheet="subjects", ttl=0).fillna("")
+    mat_df = conn.read(worksheet="materials", ttl=0).fillna("")
 except Exception as e:
-    st.error(f"データの読み込みに失敗しました。シート名を確認してください: {e}")
+    st.error(f"接続エラー: {e}")
+    st.info("StreamlitのSecretsにURLが正しく設定されているか確認してください。")
     st.stop()
 
 # ログインユーザーのデータのみ抽出
