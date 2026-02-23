@@ -37,7 +37,6 @@ LOG_COLS = ["ユーザー名", "日付", "教科", "教材名", "時間(分)", "
 SUB_COLS = ["ユーザー名", "教科名"]
 MAT_COLS = ["ユーザー名", "教科名", "教材名"]
 
-# データ読み込み（ここは既存の方法でOK）
 def load_data(sheet_name, expected_cols):
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
@@ -51,7 +50,6 @@ all_logs = load_data("logs", LOG_COLS)
 all_subjs = load_data("subjects", SUB_COLS)
 all_mats = load_data("materials", MAT_COLS)
 
-# ログインユーザーのデータのみ抽出
 my_logs = all_logs[all_logs["ユーザー名"] == user].copy()
 my_subjs = all_subjs[all_subjs["ユーザー名"] == user].copy()
 my_mats = all_mats[all_mats["ユーザー名"] == user].copy()
@@ -80,8 +78,8 @@ with tabs[0]:
                 st.error("教科と教材を正しく設定してください")
             else:
                 new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), memo]], columns=LOG_COLS)
-                # 既存データと合体させて上書き
-                conn.update(worksheet="logs", data=pd.concat([all_logs, new_row], ignore_index=True))
+                updated_logs = pd.concat([all_logs, new_row], ignore_index=True)
+                conn.update(worksheet="logs", data=updated_logs)
                 st.success("保存完了！")
                 st.rerun()
 
@@ -99,17 +97,15 @@ with tabs[1]:
     else:
         st.info("データがありません。")
 
-# --- 設定タブ (エンターキー問題を完全解消) ---
+# --- 設定タブ ---
 with tabs[2]:
     st.subheader("⚙️ 専用設定")
     
-    # 教科の追加
     st.write("📘 教科の追加")
     new_s_name = st.text_input("新しい教科名を入力", key="s_input")
     if st.button("教科を保存"):
         if new_s_name:
             new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
-            # 他人のデータを守りつつ自分のデータを追加して更新
             combined_subjs = pd.concat([all_subjs, new_s_df], ignore_index=True)
             conn.update(worksheet="subjects", data=combined_subjs)
             st.success(f"{new_s_name} を登録しました！")
@@ -117,7 +113,6 @@ with tabs[2]:
 
     st.divider()
 
-    # 教材の追加
     st.write("📚 教材の追加")
     target_s = st.selectbox("どの教科の教材？", my_valid_subjs if my_valid_subjs else ["先に教科を登録してください"])
     new_m_name = st.text_input("新しい教材名を入力", key="m_input")
