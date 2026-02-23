@@ -33,7 +33,6 @@ if st.session_state.user is None:
 user = st.session_state.user
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 厳格な列定義
 LOG_COLS = ["ユーザー名", "日付", "教科", "教材名", "時間(分)", "メモ"]
 SUB_COLS = ["ユーザー名", "教科名"]
 MAT_COLS = ["ユーザー名", "教科名", "教材名"]
@@ -43,20 +42,17 @@ def load_data_strict(sheet_name, expected_cols):
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=expected_cols)
-        # 既存の列が期待通りかチェックし、足りなければ補完
         for col in expected_cols:
             if col not in df.columns:
                 df[col] = ""
-        return df[expected_cols].fillna("") # 列順を強制的に固定
+        return df[expected_cols].fillna("")
     except:
         return pd.DataFrame(columns=expected_cols)
 
-# データの読み込み
 all_logs = load_data_strict("logs", LOG_COLS)
 all_subjs = load_data_strict("subjects", SUB_COLS)
 all_mats = load_data_strict("materials", MAT_COLS)
 
-# ログインユーザーの分だけ抽出
 my_logs = all_logs[all_logs["ユーザー名"] == user].copy()
 my_subjs = all_subjs[all_subjs["ユーザー名"] == user].copy()
 my_mats = all_mats[all_mats["ユーザー名"] == user].copy()
@@ -68,23 +64,28 @@ tabs = st.tabs(["📝 記録", "📊 分析", "⚙️ 設定"])
 
 with tabs[0]:
     st.subheader("✍️ 今日の学習")
-    valid_subjs = my_subjs["教科名"].unique().tolist()
+    my_valid_subjs = my_subjs["教科名"].unique().tolist()
     
     with st.form("record_form", clear_on_submit=True):
         d = st.date_input("日付", datetime.date.today())
-        s_choice = st.selectbox("教科", valid_subjs if valid_subjs else ["設定から追加してください"])
+        # 1. まず教科を選ぶ
+        s_choice = st.selectbox("教科", my_valid_subjs if my_valid_subjs else ["先に設定で教科を登録してください"])
         
-        m_list = my_mats[my_mats["教科名"] == s_choice]["教材名"].tolist()
-        m_choice = st.selectbox("教材", m_list if m_list else ["設定から追加してください"])
+        # 2. 選んだ教科に紐づく教材だけを抽出（ぶら下がり機能）
+        filtered_mats = my_mats[my_mats["教科名"] == s_choice]["教材名"].unique().tolist()
+        m_choice = st.selectbox("教材", filtered_mats if filtered_mats else ["教材がありません"])
         
         t = st.number_input("時間(分)", min_value=0, step=5, value=30)
         memo = st.text_input("メモ")
         
         if st.form_submit_button("🚀 記録を保存", use_container_width=True):
-            new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), memo]], columns=LOG_COLS)
-            conn.update(worksheet="logs", data=pd.concat([all_logs, new_row], ignore_index=True))
-            st.success("保存完了！")
-            st.rerun()
+            if not my_valid_subjs or not filtered_mats:
+                st.error("教科と教材を正しく選択してください")
+            else:
+                new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), memo]], columns=LOG_COLS)
+                conn.update(worksheet="logs", data=pd.concat([all_logs, new_row], ignore_index=True))
+                st.success("保存完了！")
+                st.rerun()
 
 with tabs[1]:
     st.subheader("📊 学習データ")
@@ -102,31 +103,50 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("⚙️ 専用設定")
     
-    # 教科設定
+    # --- 教科設定 ---
     st.write("📘 教科の追加・編集")
+    st.caption("例：数学、英語、プログラミングなど")
     ed_s = st.data_editor(my_subjs[["教科名"]], num_rows="dynamic", use_container_width=True, key="ed_s")
+    
     if st.button("教科を保存"):
         new_s = ed_s.dropna(subset=["教科名"])
         new_s["ユーザー名"] = user
         other_s = all_subjs[all_subjs["ユーザー名"] != user]
-        # 保存前に列順を確実に固定
         final_s = pd.concat([other_s, new_s], ignore_index=True)[SUB_COLS]
         conn.update(worksheet="subjects", data=final_s)
-        st.success("保存しました")
+        st.success("教科を保存しました！")
         st.rerun()
 
     st.divider()
 
-    # 教材設定
+    # --- 教材設定（ここが重要！） ---
     st.write("📚 教材の追加・編集")
-    ed_m = st.data_editor(my_mats[["教科名", "教材名"]], num_rows="dynamic", use_container_width=True, key="ed_m")
+    st.caption("どの教科の教材かを選んで入力してください")
+    
+    # データエディタで「教科名」を選択肢（Dropdown）にするための設定
+    # これにより、登録済みの自分の教科から選べるようになる
+    ed_m = st.data_editor(
+        my_mats[["教科名", "教材名"]], 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        key="ed_m",
+        column_config={
+            "教科名": st.column_config.SelectboxColumn(
+                "対象の教科",
+                help="登録済みの教科から選択してください",
+                options=my_valid_subjs,
+                required=True,
+            )
+        }
+    )
+    
     if st.button("教材を保存"):
         new_m = ed_m.dropna(subset=["教科名", "教材名"])
         new_m["ユーザー名"] = user
         other_m = all_mats[all_mats["ユーザー名"] != user]
         final_m = pd.concat([other_m, new_m], ignore_index=True)[MAT_COLS]
         conn.update(worksheet="materials", data=final_m)
-        st.success("保存しました")
+        st.success("教材を保存しました！")
         st.rerun()
 
 if st.sidebar.button("ログアウト"):
