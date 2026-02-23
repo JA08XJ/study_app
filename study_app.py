@@ -140,4 +140,76 @@ with tabs[0]:
         memo = st.text_input("メモ")
         
         if st.form_submit_button("🚀 記録を保存", use_container_width=True):
-            if not my_valid_
+            if not my_valid_subjs or not filtered_mats:
+                st.error("設定を確認してください")
+            else:
+                new_row = pd.DataFrame([[str(user), d.strftime("%Y-%m-%d"), str(s_choice), str(m_choice), int(t), str(memo)]], columns=LOG_COLS)
+                if safe_update("logs", pd.concat([all_logs, new_row], ignore_index=True)):
+                    st.success("保存完了！")
+                    time.sleep(0.5)
+                    st.rerun()
+
+# --- タブ2: 分析・履歴 ---
+with tabs[1]:
+    if not my_logs.empty:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            sub_sum = my_logs.groupby("教科")["時間(分)"].sum()
+            fig, ax = plt.subplots()
+            ax.pie(sub_sum, labels=sub_sum.index, autopct='%1.1f%%', startangle=90)
+            st.pyplot(fig)
+        with col2:
+            display_df = my_logs.sort_values(by="日付", ascending=False)
+            for idx, row in display_df.iterrows():
+                with st.expander(f"📅 {row['日付']} | {row['教科']} ({format_time(row['時間(分)'])})"):
+                    st.write(f"📖 教材: {row['教材名']}")
+                    st.write(f"📝 メモ: {row['メモ']}")
+    else:
+        st.info("データがありません")
+
+# --- タブ3: 本棚 ---
+with tabs[2]:
+    st.subheader("📚 本棚の管理")
+    c1, c2 = st.columns(2)
+    with c1:
+        with st.expander("➕ 教科を作成"):
+            ns = st.text_input("教科名", key="new_s")
+            if st.button("作成"):
+                new_row = pd.DataFrame([[user, ns]], columns=SUB_COLS)
+                if safe_update("subjects", pd.concat([all_subjs, new_row], ignore_index=True)):
+                    st.rerun()
+    with c2:
+        with st.expander("➕ 教材を追加"):
+            ts = st.selectbox("教科", my_valid_subjs)
+            nm = st.text_input("教材名", key="new_m")
+            if st.button("追加"):
+                new_row = pd.DataFrame([[user, ts, nm]], columns=MAT_COLS)
+                if safe_update("materials", pd.concat([all_mats, new_row], ignore_index=True)):
+                    st.rerun()
+
+    for subj in my_valid_subjs:
+        st.markdown(f"#### 🏷️ {subj}")
+        mats = my_mats[my_mats["教科名"] == subj]
+        for idx, row in mats.iterrows():
+            with st.expander(f"📖 {row['教材名']}"):
+                en = st.text_input("編集", value=row['教材名'], key=f"e_{idx}")
+                col_b1, col_b2 = st.columns(2)
+                if col_b1.button("更新", key=f"u_{idx}"):
+                    all_mats.loc[idx, "教材名"] = en
+                    if safe_update("materials", all_mats): st.rerun()
+                if col_b2.button("🗑️ 削除", key=f"d_{idx}"):
+                    if safe_update("materials", all_mats.drop(idx)): st.rerun()
+
+# --- タブ4: 設定 ---
+with tabs[3]:
+    st.subheader("⚙️ 設定")
+    nt = st.number_input("目標時間(分)", min_value=1, value=daily_target)
+    if st.button("目標更新"):
+        other = all_tars[all_tars["ユーザー名"].astype(str).str.strip() != user]
+        new_row = pd.DataFrame([[user, nt]], columns=TAR_COLS)
+        if safe_update("targets", pd.concat([other, new_row], ignore_index=True)):
+            st.rerun()
+
+if st.sidebar.button("ログアウト"):
+    st.session_state.user = None
+    st.rerun()
