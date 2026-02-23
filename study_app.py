@@ -190,3 +190,4 @@ with tabs[3]:
 if st.sidebar.button("ログアウト"):
     st.session_state.user = None
     st.rerun()
+    
