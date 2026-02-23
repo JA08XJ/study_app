@@ -33,7 +33,6 @@ if st.session_state.user is None:
 user = st.session_state.user
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 列定義を完全に固定
 LOG_COLS = ["ユーザー名", "日付", "教科", "教材名", "時間(分)", "メモ"]
 SUB_COLS = ["ユーザー名", "教科名"]
 MAT_COLS = ["ユーザー名", "教科名", "教材名"]
@@ -43,20 +42,14 @@ def load_data_safe(sheet_name, expected_cols):
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=expected_cols)
-        # 必要な列が欠けている場合の補正
-        for col in expected_cols:
-            if col not in df.columns:
-                df[col] = ""
-        return df[expected_cols].fillna("")
+        return df.fillna("")
     except:
         return pd.DataFrame(columns=expected_cols)
 
-# データの読み込み
 all_logs = load_data_safe("logs", LOG_COLS)
 all_subjs = load_data_safe("subjects", SUB_COLS)
 all_mats = load_data_safe("materials", MAT_COLS)
 
-# 自分のデータのみ抽出
 my_logs = all_logs[all_logs["ユーザー名"] == user].copy()
 my_subjs = all_subjs[all_subjs["ユーザー名"] == user].copy()
 my_mats = all_mats[all_mats["ユーザー名"] == user].copy()
@@ -67,14 +60,12 @@ st.title(f"🚀 {user}'s Room")
 # --- 4. メイン画面 ---
 tabs = st.tabs(["📝 記録", "📊 分析", "⚙️ 設定"])
 
-# --- タブ1: 記録 (個別表示・ぶら下がり選択) ---
 with tabs[0]:
     st.subheader("✍️ 今日の学習")
     with st.form("record_form", clear_on_submit=True):
         d = st.date_input("日付", datetime.date.today())
-        s_choice = st.selectbox("教科", my_valid_subjs if my_valid_subjs else ["先に設定で教科を登録してください"])
+        s_choice = st.selectbox("教科", my_valid_subjs if my_valid_subjs else ["設定から追加してください"])
         
-        # ぶら下がり機能
         filtered_mats = my_mats[my_mats["教科名"] == s_choice]["教材名"].unique().tolist()
         m_choice = st.selectbox("教材", filtered_mats if filtered_mats else ["教材がありません"])
         
@@ -86,11 +77,11 @@ with tabs[0]:
                 st.error("教科と教材を正しく設定してください")
             else:
                 new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), memo]], columns=LOG_COLS)
-                conn.create(worksheet="logs", data=new_row) # 追記(create)に変更
+                # 安全な追記処理
+                conn.create(worksheet="logs", data=new_row)
                 st.success("記録しました！")
                 st.rerun()
 
-# --- タブ2: 分析 (個別表示) ---
 with tabs[1]:
     st.subheader("📊 学習データ")
     if not my_logs.empty:
@@ -104,38 +95,35 @@ with tabs[1]:
     else:
         st.info("データがありません。")
 
-# --- タブ3: 設定 (個別保存・プルダウン選択) ---
 with tabs[2]:
     st.subheader("⚙️ 専用設定")
     
-    # 教科の追加 (エラー回避のため「1つずつ追加」方式)
+    # ユーザーごとに教科を追加
     with st.expander("📘 教科を追加する"):
         with st.form("add_subject_form", clear_on_submit=True):
             new_s_name = st.text_input("新しい教科名 (例: 数学)")
             if st.form_submit_button("教科を登録"):
                 if new_s_name:
                     new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
-                    conn.create(worksheet="subjects", data=new_s_df) # 追記
+                    conn.create(worksheet="subjects", data=new_s_df)
                     st.success(f"{new_s_name} を登録しました。")
                     st.rerun()
 
     st.divider()
 
-    # 教材の追加
+    # 自分の教科に紐づく教材を追加（ぶら下がり）
     with st.expander("📚 教材を追加する"):
         with st.form("add_material_form", clear_on_submit=True):
-            target_s = st.selectbox("どの教科の教材？", my_valid_subjs if my_valid_subjs else ["教科を先に登録してください"])
+            target_s = st.selectbox("どの教科の教材？", my_valid_subjs if my_valid_subjs else ["先に教科を登録してください"])
             new_m_name = st.text_input("教材名 (例: 青チャート)")
             if st.form_submit_button("教材を登録"):
-                if target_s and new_m_name and target_s != "教科を先に登録してください":
+                if target_s and new_m_name and target_s != "先に教科を登録してください":
                     new_m_df = pd.DataFrame([[user, target_s, new_m_name]], columns=MAT_COLS)
-                    conn.create(worksheet="materials", data=new_m_df) # 追記
+                    conn.create(worksheet="materials", data=new_m_df)
                     st.success(f"{target_s} に {new_m_name} を登録しました。")
                     st.rerun()
-
-    st.divider()
-    st.caption("※登録した教科・教材の削除はスプレッドシートから直接行ってください。")
 
 if st.sidebar.button("ログアウト"):
     st.session_state.user = None
     st.rerun()
+    
