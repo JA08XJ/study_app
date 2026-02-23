@@ -5,7 +5,7 @@ import datetime
 import matplotlib.pyplot as plt
 
 # --- 1. 基本設定 ---
-st.set_page_config(page_title="Study App Pro", layout="centered")
+st.set_page_config(page_title="Study App Pro", layout="wide") # wideにすると4項目が綺麗に並びます
 
 # --- 2. ログイン機能 ---
 if 'user' not in st.session_state:
@@ -39,7 +39,6 @@ MAT_COLS = ["ユーザー名", "教科名", "教材名"]
 
 def load_data(sheet_name, expected_cols):
     try:
-        # ttl=0 で常に最新データを取得
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=expected_cols)
@@ -47,30 +46,47 @@ def load_data(sheet_name, expected_cols):
     except:
         return pd.DataFrame(columns=expected_cols)
 
-# 全データ取得
+# データ読込
 all_logs = load_data("logs", LOG_COLS)
 all_subjs = load_data("subjects", SUB_COLS)
 all_mats = load_data("materials", MAT_COLS)
 
-# --- データの型変換（ここが重要：表示されない問題を解決） ---
-# 1. ユーザー名でフィルタリング（空白を除去して確実に一致させる）
+# ユーザーフィルタリング & 型変換
 my_logs = all_logs[all_logs["ユーザー名"].astype(str).str.strip() == user].copy()
 my_subjs = all_subjs[all_subjs["ユーザー名"].astype(str).str.strip() == user].copy()
 my_mats = all_mats[all_mats["ユーザー名"].astype(str).str.strip() == user].copy()
 
-# 2. 時間(分)を数値に、日付を日付型に変換
 if not my_logs.empty:
     my_logs["時間(分)"] = pd.to_numeric(my_logs["時間(分)"], errors='coerce').fillna(0)
     my_logs["日付"] = pd.to_datetime(my_logs["日付"]).dt.date
 
 my_valid_subjs = my_subjs["教科名"].unique().tolist()
 
+# --- 🏆 常に表示される「トップサマリー」 ---
 st.title(f"🚀 {user}'s Room")
 
-# --- 4. メイン画面 ---
-tabs = st.tabs(["📝 記録", "📊 分析", "⚙️ 設定"])
+# 指標の計算
+if not my_logs.empty:
+    total_m = my_logs["時間(分)"].sum()
+    today_m = my_logs[my_logs["日付"] == datetime.date.today()]["時間(分)"].sum()
+    count_d = my_logs["日付"].nunique()
+    avg_m = total_m / count_d if count_d > 0 else 0
+else:
+    total_m = today_m = count_d = avg_m = 0
 
-# --- 記録タブ ---
+# 画面最上部に配置
+m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+m_col1.metric("総学習時間", f"{int(total_m)}分")
+m_col2.metric("今日の学習", f"{int(today_m)}分", delta=f"{int(today_m)} min" if today_m > 0 else None)
+m_col3.metric("1日平均", f"{int(avg_m)}分")
+m_col4.metric("学習日数", f"{count_d}日")
+
+st.divider() # 区切り線
+
+# --- 4. メイン画面 (タブ) ---
+tabs = st.tabs(["📝 記録", "📊 分析・履歴", "⚙️ 設定"])
+
+# --- タブ1: 記録 ---
 with tabs[0]:
     st.subheader("✍️ 学習の記録")
     with st.form("record_form", clear_on_submit=True):
@@ -87,51 +103,32 @@ with tabs[0]:
             if not my_valid_subjs or not filtered_mats:
                 st.error("教科と教材を正しく設定してください")
             else:
-                # 文字列として保存（Google Sheetsとの相性のため）
                 new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, t, memo]], columns=LOG_COLS)
-                updated_logs = pd.concat([all_logs, new_row], ignore_index=True)
-                conn.update(worksheet="logs", data=updated_logs)
+                conn.update(worksheet="logs", data=pd.concat([all_logs, new_row], ignore_index=True))
                 st.success("保存完了！")
                 st.rerun()
 
-# --- 分析タブ ---
+# --- タブ2: 分析・履歴 ---
 with tabs[1]:
-    st.subheader("📊 学習サマリー")
-    
     if not my_logs.empty:
-        # 指標の計算
-        total_minutes = my_logs["時間(分)"].sum()
-        today = datetime.date.today()
-        today_minutes = my_logs[my_logs["日付"] == today]["時間(分)"].sum()
-        count_days = my_logs["日付"].nunique()
-        avg_minutes = total_minutes / count_days if count_days > 0 else 0
+        col_left, col_right = st.columns([1, 1])
         
-        # 4つの指標を表示
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("総学習時間", f"{int(total_minutes)}分")
-        col2.metric("今日の学習", f"{int(today_minutes)}分")
-        col3.metric("1日平均", f"{int(avg_minutes)}分")
-        col4.metric("学習日数", f"{count_days}日")
-        
-        st.divider()
-        
-        # 円グラフ表示
-        sub_sum = my_logs.groupby("教科")["時間(分)"].sum()
-        if not sub_sum.empty:
-            fig, ax = plt.subplots()
+        with col_left:
+            st.subheader("📊 教科別バランス")
+            sub_sum = my_logs.groupby("教科")["時間(分)"].sum()
+            fig, ax = plt.subplots(figsize=(5, 5))
             ax.pie(sub_sum, labels=sub_sum.index, autopct='%1.1f%%', startangle=90)
             ax.axis('equal')
             st.pyplot(fig)
-        
-        st.subheader("📋 履歴一覧")
-        # 表示用に日付順にソート（新しい順）
-        display_df = my_logs.sort_values(by="日付", ascending=False).drop(columns=["ユーザー名"])
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        
+            
+        with col_right:
+            st.subheader("📋 履歴一覧")
+            display_df = my_logs.sort_values(by="日付", ascending=False).drop(columns=["ユーザー名"])
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
     else:
-        st.info("データがありません。記録タブから学習を記録しましょう！")
+        st.info("データがありません。記録を開始しましょう！")
 
-# --- 設定タブ ---
+# --- タブ3: 設定 ---
 with tabs[2]:
     st.subheader("⚙️ 専用設定")
     
@@ -140,8 +137,7 @@ with tabs[2]:
     if st.button("教科を保存"):
         if new_s_name:
             new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
-            combined_subjs = pd.concat([all_subjs, new_s_df], ignore_index=True)
-            conn.update(worksheet="subjects", data=combined_subjs)
+            conn.update(worksheet="subjects", data=pd.concat([all_subjs, new_s_df], ignore_index=True))
             st.success(f"「{new_s_name}」を登録しました！")
             st.rerun()
 
@@ -153,8 +149,7 @@ with tabs[2]:
     if st.button("教材を保存"):
         if target_s and new_m_name and target_s != "先に教科を登録してください":
             new_m_df = pd.DataFrame([[user, target_s, new_m_name]], columns=MAT_COLS)
-            combined_mats = pd.concat([all_mats, new_m_df], ignore_index=True)
-            conn.update(worksheet="materials", data=combined_mats)
+            conn.update(worksheet="materials", data=pd.concat([all_mats, new_m_df], ignore_index=True))
             st.success(f"「{new_m_name}」を登録しました！")
             st.rerun()
 
