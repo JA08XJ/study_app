@@ -2,7 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
-import matplotlib.subplots as plt
+import matplotlib.pyplot as plt
 
 # --- 1. 基本設定 ---
 st.set_page_config(page_title="Study App Pro", layout="centered")
@@ -42,6 +42,8 @@ def load_data_safe(sheet_name, expected_cols):
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=expected_cols)
+        # 列名をトリミングして一致を確実にする
+        df.columns = [c.strip() for c in df.columns]
         return df.fillna("")
     except:
         return pd.DataFrame(columns=expected_cols)
@@ -100,17 +102,13 @@ with tabs[2]:
     
     # --- 教科の追加 (エンターキー問題を解消) ---
     with st.expander("📘 教科を追加する", expanded=True):
-        # フォームを使わないことでエンターキーによる送信・消失を防止
         new_s_name = st.text_input("新しい教科名 (例: 数学)", key="new_s_input")
         if st.button("教科を登録"):
             if new_s_name:
                 new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
                 updated_subjs = pd.concat([all_subjs, new_s_df], ignore_index=True)
-                # create ではなく update で正しく上書き
                 conn.update(worksheet="subjects", data=updated_subjs)
                 st.success(f"「{new_s_name}」を登録しました！")
-                # 保存後にだけ入力欄を空にする
-                st.session_state.new_s_input = ""
                 st.rerun()
             else:
                 st.warning("教科名を入力してください。")
@@ -128,7 +126,6 @@ with tabs[2]:
                 updated_mats = pd.concat([all_mats, new_m_df], ignore_index=True)
                 conn.update(worksheet="materials", data=updated_mats)
                 st.success(f"「{target_s}」に「{new_m_name}」を登録しました！")
-                st.session_state.new_m_input = ""
                 st.rerun()
             else:
                 st.warning("教科と教材名を正しく入力してください。")
