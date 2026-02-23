@@ -4,21 +4,21 @@ import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
 
-# --- 1. 基本設定 ---
+# --- A. 基本設定 ---
 st.set_page_config(page_title="Study App Pro", layout="centered")
 
-# --- 2. ログイン機能 ---
+# --- B. ログイン機能 ---
 if 'user' not in st.session_state:
     st.session_state.user = None
 
 def login():
-    st.markdown("### 🔐 Study App Login")
-    user_input = st.text_input("ユーザー名")
-    pw_input = st.text_input("パスワード", type="password")
+    st.title("🔐 Study App Login")
+    u_input = st.text_input("ユーザー名", key="login_user")
+    p_input = st.text_input("パスワード", type="password", key="login_pw")
     if st.button("ログイン", use_container_width=True, type="primary"):
-        if "passwords" in st.secrets and user_input in st.secrets["passwords"]:
-            if pw_input == st.secrets["passwords"][user_input]:
-                st.session_state.user = user_input
+        if "passwords" in st.secrets and u_input in st.secrets["passwords"]:
+            if str(p_input) == str(st.secrets["passwords"][u_input]):
+                st.session_state.user = u_input
                 st.rerun()
             else:
                 st.error("パスワードが違います")
@@ -29,104 +29,99 @@ if st.session_state.user is None:
     login()
     st.stop()
 
-# --- 3. データ連携 (秘密のURLをSecretsから読み込む設定) ---
-# この一行が、Secretsに書いたURLを自動的に探しに行きます
+# --- C. データ連携 (Google Sheets) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-user = st.session_state.user
+def safe_read(sheet_name, default_cols):
+    try:
+        # 400エラー回避のため、一旦データ全体を読み込む
+        df = conn.read(worksheet=sheet_name, ttl=0)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=default_cols)
+        return df.fillna("")
+    except:
+        # シートが空、または読み込みエラー時は空の枠組みを返す
+        return pd.DataFrame(columns=default_cols)
 
-# データの読み込み
+# 期待される列名
+LOG_COLS = ["ユーザー名", "日付", "教科", "教材名", "時間(分)", "メモ"]
+SUB_COLS = ["教科名"]
+MAT_COLS = ["教科名", "教材名"]
+
 try:
-    all_logs = conn.read(worksheet="logs", ttl=0).fillna("")
-    subj_df = conn.read(worksheet="subjects", ttl=0).fillna("")
-    mat_df = conn.read(worksheet="materials", ttl=0).fillna("")
+    all_logs = safe_read("logs", LOG_COLS)
+    subj_df = safe_read("subjects", SUB_COLS)
+    mat_df = safe_read("materials", MAT_COLS)
 except Exception as e:
     st.error(f"接続エラー: {e}")
-    st.info("StreamlitのSecretsにURLが正しく設定されているか確認してください。")
     st.stop()
 
-# ログインユーザーのデータのみ抽出
-log_df = all_logs[all_logs["ユーザー名"] == user].copy()
-valid_subjects = [s for s in subj_df["教科名"].tolist() if s]
+user = st.session_state.user
+# 自分のデータのみ抽出
+if not all_logs.empty and "ユーザー名" in all_logs.columns:
+    log_df = all_logs[all_logs["ユーザー名"] == user].copy()
+else:
+    log_df = pd.DataFrame(columns=LOG_COLS)
 
-st.title(f"🚀 {user}'s Study App")
+valid_subjects = subj_df["教科名"].dropna().tolist() if not subj_df.empty else []
 
-# --- 5. メトリクス表示 ---
-today_str = str(datetime.date.today())
-df_today = log_df[log_df["日付"] == today_str]
-t_today = pd.to_numeric(df_today["時間(分)"], errors='coerce').sum()
-t_total = pd.to_numeric(log_df["時間(分)"], errors='coerce').sum()
+st.title(f"🚀 {user}'s Study Room")
 
-col1, col2 = st.columns(2)
-col1.metric("今日", f"{int(t_today)} min")
-col2.metric("累計", f"{int(t_total // 60)}h {int(t_total % 60)}m")
-
-st.divider()
-
-# --- 6. タブメニュー ---
+# --- D. メイン画面 ---
 tabs = st.tabs(["📝 記録", "📊 分析", "⚙️ 設定"])
 
 with tabs[0]:
-    st.subheader("✍️ 今日の学習")
+    st.subheader("✍️ 学習の記録")
     with st.form("record_form", clear_on_submit=True):
         d = st.date_input("日付", datetime.date.today())
         s_choice = st.selectbox("教科", valid_subjects if valid_subjects else ["未登録"])
         
-        # 教科に合わせて教材リストをフィルタリング
-        m_list = mat_df[mat_df["教科名"] == s_choice]["教材名"].tolist()
+        m_list = []
+        if not mat_df.empty and "教科名" in mat_df.columns:
+            m_list = mat_df[mat_df["教科名"] == s_choice]["教材名"].tolist()
         m_choice = st.selectbox("教材", m_list if m_list else ["未登録"])
         
         t = st.number_input("時間(分)", min_value=0, step=5, value=30)
         c = st.text_input("メモ")
         
         if st.form_submit_button("🚀 記録を保存", use_container_width=True):
-            # 新しい行を作成（全列分：ユーザー名, 日付, 教科, 教材名, 時間(分), メモ）
-            new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, str(t), c]], columns=all_logs.columns)
-            updated_logs = pd.concat([all_logs, new_row], ignore_index=True)
-            
-            # スプレッドシートを更新
+            # 常に期待される列順でデータを作成
+            new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), c]], columns=LOG_COLS)
+            # 既存データが空の場合でも対応
+            updated_logs = pd.concat([all_logs if not all_logs.empty else pd.DataFrame(columns=LOG_COLS), new_row], ignore_index=True)
             conn.update(worksheet="logs", data=updated_logs)
-            st.success("スプレッドシートに保存しました！")
+            st.success("保存しました！")
             st.rerun()
 
 with tabs[1]:
     st.subheader("📊 学習データ")
-    if not log_df.empty:
+    if not log_df.empty and "時間(分)" in log_df.columns:
         log_numeric = log_df.copy()
         log_numeric["時間(分)"] = pd.to_numeric(log_numeric["時間(分)"], errors='coerce')
-        
-        # 円グラフ
         sub_sum = log_numeric.groupby("教科")["時間(分)"].sum()
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.pie(sub_sum, labels=sub_sum.index, autopct='%1.1f%%', startangle=90)
-        st.pyplot(fig)
-        
-        st.divider()
-        st.markdown("### 🎞️ 過去の履歴")
-        st.dataframe(log_df.drop(columns=["ユーザー名"]), use_container_width=True, hide_index=True)
+        if not sub_sum.empty:
+            fig, ax = plt.subplots()
+            ax.pie(sub_sum, labels=sub_sum.index, autopct='%1.1f%%', startangle=90)
+            st.pyplot(fig)
+        st.dataframe(log_df.drop(columns=["ユーザー名"], errors="ignore"), use_container_width=True, hide_index=True)
     else:
         st.info("まだ記録がありません。")
 
 with tabs[2]:
-    st.subheader("⚙️ 全体設定")
-    st.caption("※教科と教材は全ユーザー共通です")
+    st.subheader("⚙️ 教科・教材の管理")
+    st.write("📘 教科の編集")
+    new_subj = st.data_editor(subj_df if not subj_df.empty else pd.DataFrame(columns=SUB_COLS), num_rows="dynamic", use_container_width=True, key="ed_s")
+    if st.button("教科を保存"):
+        conn.update(worksheet="subjects", data=new_subj)
+        st.rerun()
+
+    st.write("📚 教材の編集")
+    new_mat = st.data_editor(mat_df if not mat_df.empty else pd.DataFrame(columns=MAT_COLS), num_rows="dynamic", use_container_width=True, key="ed_m")
+    if st.button("教材を保存"):
+        conn.update(worksheet="materials", data=new_mat)
+        st.rerun()
+
+if st.sidebar.button("ログアウト"):
+    st.session_state.user = None
+    st.rerun()
     
-    with st.expander("🛠️ 教科の編集"):
-        ed_s = st.data_editor(subj_df, num_rows="dynamic", use_container_width=True, hide_index=True)
-        if st.button("教科を保存", use_container_width=True):
-            conn.update(worksheet="subjects", data=ed_s)
-            st.rerun()
-            
-    with st.expander("📚 教材の管理"):
-        updated_m_list = []
-        for s in valid_subjects:
-            st.write(f"📘 {s}")
-            curr_m = mat_df[mat_df["教科名"] == s][["教材名"]]
-            ed_m = st.data_editor(curr_m, num_rows="dynamic", key=f"ed_{s}", use_container_width=True, hide_index=True)
-            for _, row in ed_m.iterrows():
-                if row["教材名"]:
-                    updated_m_list.append({"教科名": s, "教材名": row["教材名"]})
-        
-        if st.button("教材をまとめて保存", use_container_width=True):
-            conn.update(worksheet="materials", data=pd.DataFrame(updated_m_list))
-            st.rerun()
