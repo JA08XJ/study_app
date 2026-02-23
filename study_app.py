@@ -2,7 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
-import matplotlib.pyplot as plt
+import matplotlib.subplots as plt
 
 # --- 1. 基本設定 ---
 st.set_page_config(page_title="Study App Pro", layout="centered")
@@ -77,8 +77,8 @@ with tabs[0]:
                 st.error("教科と教材を正しく設定してください")
             else:
                 new_row = pd.DataFrame([[user, str(d), s_choice, m_choice, int(t), memo]], columns=LOG_COLS)
-                # 安全な追記処理
-                conn.create(worksheet="logs", data=new_row)
+                updated_logs = pd.concat([all_logs, new_row], ignore_index=True)
+                conn.update(worksheet="logs", data=updated_logs)
                 st.success("記録しました！")
                 st.rerun()
 
@@ -98,32 +98,41 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("⚙️ 専用設定")
     
-    # ユーザーごとに教科を追加
-    with st.expander("📘 教科を追加する"):
-        with st.form("add_subject_form", clear_on_submit=True):
-            new_s_name = st.text_input("新しい教科名 (例: 数学)")
-            if st.form_submit_button("教科を登録"):
-                if new_s_name:
-                    new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
-                    conn.create(worksheet="subjects", data=new_s_df)
-                    st.success(f"{new_s_name} を登録しました。")
-                    st.rerun()
+    # --- 教科の追加 (エンターキー問題を解消) ---
+    with st.expander("📘 教科を追加する", expanded=True):
+        # フォームを使わないことでエンターキーによる送信・消失を防止
+        new_s_name = st.text_input("新しい教科名 (例: 数学)", key="new_s_input")
+        if st.button("教科を登録"):
+            if new_s_name:
+                new_s_df = pd.DataFrame([[user, new_s_name]], columns=SUB_COLS)
+                updated_subjs = pd.concat([all_subjs, new_s_df], ignore_index=True)
+                # create ではなく update で正しく上書き
+                conn.update(worksheet="subjects", data=updated_subjs)
+                st.success(f"「{new_s_name}」を登録しました！")
+                # 保存後にだけ入力欄を空にする
+                st.session_state.new_s_input = ""
+                st.rerun()
+            else:
+                st.warning("教科名を入力してください。")
 
     st.divider()
 
-    # 自分の教科に紐づく教材を追加（ぶら下がり）
-    with st.expander("📚 教材を追加する"):
-        with st.form("add_material_form", clear_on_submit=True):
-            target_s = st.selectbox("どの教科の教材？", my_valid_subjs if my_valid_subjs else ["先に教科を登録してください"])
-            new_m_name = st.text_input("教材名 (例: 青チャート)")
-            if st.form_submit_button("教材を登録"):
-                if target_s and new_m_name and target_s != "先に教科を登録してください":
-                    new_m_df = pd.DataFrame([[user, target_s, new_m_name]], columns=MAT_COLS)
-                    conn.create(worksheet="materials", data=new_m_df)
-                    st.success(f"{target_s} に {new_m_name} を登録しました。")
-                    st.rerun()
+    # --- 教材の追加 (エンターキー問題を解消) ---
+    with st.expander("📚 教材を追加する", expanded=True):
+        target_s = st.selectbox("どの教科の教材？", my_valid_subjs if my_valid_subjs else ["先に教科を登録してください"])
+        new_m_name = st.text_input("教材名 (例: 青チャート)", key="new_m_input")
+        
+        if st.button("教材を登録"):
+            if target_s and new_m_name and target_s != "先に教科を登録してください":
+                new_m_df = pd.DataFrame([[user, target_s, new_m_name]], columns=MAT_COLS)
+                updated_mats = pd.concat([all_mats, new_m_df], ignore_index=True)
+                conn.update(worksheet="materials", data=updated_mats)
+                st.success(f"「{target_s}」に「{new_m_name}」を登録しました！")
+                st.session_state.new_m_input = ""
+                st.rerun()
+            else:
+                st.warning("教科と教材名を正しく入力してください。")
 
 if st.sidebar.button("ログアウト"):
     st.session_state.user = None
     st.rerun()
-    
